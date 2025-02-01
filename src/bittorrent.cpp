@@ -1,42 +1,4 @@
-#include <iostream>
-#include <fstream>
-#include <mpi.h>
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unordered_map>
-#include <list>
-#include <mutex>
-
-using namespace std;
-
-#define TRACKER_RANK 0
-#define MAX_FILENAME 50
-#define HASH_SIZE 32
-#define MAX_HOSTS 30
-#define TRACKER_TAG 0
-#define SENDTO_UPLOAD_TAG 1
-#define RECVFROM_UPLOAD_TAG 2
-#define MSG_LEN 3600
-
-#define DIE(assertion, call_description)				\
-	do {								\
-		if (assertion) {					\
-			fprintf(stderr, "(%s, %d): ",			\
-					__FILE__, __LINE__);		\
-			perror(call_description);			\
-			exit(errno);					\
-		}							\
-	} while (0)
-
-mutex owned_files_mutex;
-
-/********************** Data for the client ****************************/
-
-unordered_map<string, list<pair<string, bool>>> owned_files;
-unordered_map<string, bool> wanted_files;
-unordered_map<string, bool> registered_hashes;
-int num_tasks = 0;
+#include "bittorrent.h"
 
 void send_message(string command, int dest, int tag)
 {
@@ -137,18 +99,18 @@ void *download_thread_func(void *arg)
         receive_message(buffer, TRACKER_TAG);
 
         char *token = strtok(buffer, " ");
-        unique_lock<mutex> lock(owned_files_mutex);
         while (token) {
             string seg(token);
             string key = element.first + " " + token;
             if (registered_hashes.find(key) == registered_hashes.end()) {
                 (*downloaded_files)[element.first].push_back(make_pair(seg, false));
+                unique_lock<mutex> lock(owned_files_mutex);
                 owned_files[element.first].push_back(make_pair(seg, false));
+                lock.unlock();
                 registered_hashes[key] = true;
             }
             token = strtok(NULL, " ");
         }
-        lock.unlock();
 
         int host = 0, size = 0;
         MPI_Recv(&size, 1, MPI_INT, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -175,7 +137,7 @@ void *download_thread_func(void *arg)
                 valid[i] = (bool)ok;
             }
 
-            int optimal_id = -1, min_requests = 1000000;
+            int optimal_id = -1, min_requests = INF;
             for (int i = 1; i < num_tasks; i++)
                 if (i != rank && host_requests[i] >= 0 && host_requests[i] <= min_requests && valid[i]) {
                     optimal_id = i;
@@ -268,13 +230,6 @@ void *upload_thread_func(void *arg)
 
     return NULL;
 }
-
-/********************** Data for the tracker ****************************/
-
-unordered_map<string, list<string>> hash_db;
-unordered_map<string, list<int>> seed_db;
-unordered_map<string, list<int>> peer_db;
-unordered_map<string, bool> tracker_registered_hashes;
 
 void init_tracker(int numtasks, int rank) {
     int num_files = 0, size = 0, num_segments = 0;
