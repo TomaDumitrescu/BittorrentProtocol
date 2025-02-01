@@ -41,7 +41,7 @@ function test1 {
 	echo "Se ruleaza testul 1..."
 	cp tests/test1/* .
 	correct=0
-	run_timeout "mpirun --oversubscribe -np 4 ./tema2"
+	run_timeout "mpirun --oversubscribe -np 4 ./bittorrent"
 	compare_files client1_file3 out3.txt
 	compare_files client2_file1 out1.txt
 	compare_files client3_file1 out1.txt
@@ -64,7 +64,7 @@ function test2 {
 	echo "Se ruleaza testul 2..."
 	cp tests/test2/* .
 	correct=0
-	run_timeout "mpirun --oversubscribe -np 6 ./tema2"
+	run_timeout "mpirun --oversubscribe -np 6 ./bittorrent"
 	compare_files client1_file7 out7.txt
 	compare_files client2_file6 out6.txt
 	compare_files client3_file4 out4.txt
@@ -89,7 +89,7 @@ function test3 {
 	echo "Se ruleaza testul 3..."
 	cp tests/test3/* .
 	correct=0
-	run_timeout "mpirun --oversubscribe -np 5 ./tema2"
+	run_timeout "mpirun --oversubscribe -np 5 ./bittorrent"
 	compare_files client1_file2 out2.txt
 	compare_files client2_file1 out1.txt
 	compare_files client3_file1 out1.txt
@@ -111,7 +111,7 @@ function test4 {
 	echo "Se ruleaza testul 4..."
 	cp tests/test4/* .
 	correct=0
-	run_timeout "mpirun --oversubscribe -np 7 ./tema2"
+	run_timeout "mpirun --oversubscribe -np 7 ./bittorrent"
 	compare_files client3_file1 out1.txt
 	compare_files client4_file1 out1.txt
 	compare_files client5_file1 out1.txt
@@ -136,14 +136,14 @@ date
 export OMPI_ALLOW_RUN_AS_ROOT=1
 export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 
-# se compileaza tema
+# se compileaza programul
 cd ../src
 make clean &> /dev/null
 make build &> build.txt
 
-if [ ! -f tema2 ]
+if [ ! -f bittorrent ]
 then
-    echo "E: Nu s-a putut compila tema"
+    echo "E: Nu s-a putut compila programul"
     cat build.txt
     show_score
     rm -rf build.txt
@@ -152,7 +152,7 @@ fi
 
 rm -rf build.txt
 
-mv tema2 ../checker
+mv bittorrent ../checker
 cd ../checker
 
 echo ""

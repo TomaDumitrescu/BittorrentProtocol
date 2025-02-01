@@ -1,5 +1,5 @@
 build:
-	mpic++ -o tema2 tema2.cpp -pthread -Wall
+	mpic++ -o bittorrent bittorrent.cpp -pthread -Wall
 
 clean:
-	rm -rf tema2
+	rm -rf bittorrent
