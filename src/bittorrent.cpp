@@ -1,10 +1,9 @@
 #include "bittorrent.h"
 
-void send_message(string command, int dest, int tag)
-{
+void send_message(string command, int dest, int tag) {
     int length = command.size();
     MPI_Send(&length, 1, MPI_INT, dest, tag, MPI_COMM_WORLD);
-    MPI_Send(command.c_str(), length, MPI_CHAR, dest, tag, MPI_COMM_WORLD);
+    MPI_Send(command.c_str(), length, MPI_CHAR, dest, tag + 1, MPI_COMM_WORLD);
 }
 
 int receive_message(char *buffer, int tag) {
@@ -12,36 +11,35 @@ int receive_message(char *buffer, int tag) {
     MPI_Status status;
     MPI_Recv(&len, 1, MPI_INT, MPI_ANY_SOURCE, tag, MPI_COMM_WORLD, &status);
     memset(buffer, '\0', (len + 3 < MSG_LEN)? len + 3 : MSG_LEN - 1);
-    MPI_Recv(buffer, len, MPI_CHAR, status.MPI_SOURCE, tag, MPI_COMM_WORLD, &status);
+    MPI_Recv(buffer, len, MPI_CHAR, status.MPI_SOURCE, tag + 1, MPI_COMM_WORLD, &status);
     return status.MPI_SOURCE;
 }
 
-void init_client(int rank)
-{
+void init_client(int rank) {
     // Reading data from the client file
     string infile = "in" + to_string(rank) + ".txt";
     ifstream fin(infile.c_str());
 
-    int num_files, num_segments;
+    int num_files = 0, num_segments = 0, tag = TRACKER_TAG;
     string filename, segment_hash;
     fin >> num_files;
-    MPI_Send(&num_files, 1, MPI_INT, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD);
+    MPI_Send(&num_files, 1, MPI_INT, TRACKER_RANK, tag++, MPI_COMM_WORLD);
     for (int i = 0; i < num_files; ++i) {
         fin >> filename >> num_segments;
 
         int size = filename.length();
         // Sending the file name to the tracker, fingerprint for the file names
-        MPI_Send(&size, 1, MPI_INT, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD);
-        MPI_Send(filename.c_str(), size, MPI_CHAR, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD);
-        MPI_Send(&num_segments, 1, MPI_INT, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD);
+        MPI_Send(&size, 1, MPI_INT, TRACKER_RANK, tag++, MPI_COMM_WORLD);
+        MPI_Send(filename.c_str(), size, MPI_CHAR, TRACKER_RANK, tag++, MPI_COMM_WORLD);
+        MPI_Send(&num_segments, 1, MPI_INT, TRACKER_RANK, tag++, MPI_COMM_WORLD);
 
         for (int j = 0; j < num_segments; ++j) {
             fin >> segment_hash;
 
             // Sending the hash of the segment to the tracker
-            MPI_Send(segment_hash.c_str(), HASH_SIZE, MPI_CHAR, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD);
-
-            owned_files[filename].push_back(make_pair(segment_hash, true));
+            MPI_Send(segment_hash.c_str(), HASH_SIZE, MPI_CHAR, TRACKER_RANK, tag++, MPI_COMM_WORLD);
+            string key = filename + " " + segment_hash;
+            owned_files[key] = true;
         }
     }
 
@@ -56,19 +54,17 @@ void init_client(int rank)
 
     // Receiving message from the tracker
     char ack[4] = {0};
-    MPI_Recv(ack, 3, MPI_CHAR, TRACKER_RANK, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(ack, 3, MPI_CHAR, TRACKER_RANK, ACK_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     DIE(strncmp(ack, "ACK", 3) != 0, "The tracker did not send ACK");
 }
 
-void save_file(int id, string filename, unordered_map<string, list<pair<string, bool>>> *downloaded_files)
-{
+void save_file(int id, string filename, unordered_map<string, list<pair<string, bool>>> *downloaded) {
     string out_name = "client" + to_string(id) + "_" + filename;
     ofstream out(out_name.c_str());
     bool first = true;
-    for (const auto& e : (*downloaded_files)[filename]) {
-        if (!first) {
+    for (const auto& e : (*downloaded)[filename]) {
+        if (!first)
             out << "\n";
-        }
 
         out << e.first;
         first = false;
@@ -77,8 +73,7 @@ void save_file(int id, string filename, unordered_map<string, list<pair<string, 
     out.close();
 }
 
-void *download_thread_func(void *arg)
-{
+void *download_thread_func(void *arg) {
     int rank = *(int*) arg;
     init_client(rank);
 
@@ -102,13 +97,8 @@ void *download_thread_func(void *arg)
         while (token) {
             string seg(token);
             string key = element.first + " " + token;
-            if (registered_hashes.find(key) == registered_hashes.end()) {
-                (*downloaded_files)[element.first].push_back(make_pair(seg, false));
-                unique_lock<mutex> lock(owned_files_mutex);
-                owned_files[element.first].push_back(make_pair(seg, false));
-                lock.unlock();
-                registered_hashes[key] = true;
-            }
+            (*downloaded_files)[element.first].emplace_back(seg, false);
+            owned_files[key] = false;
             token = strtok(NULL, " ");
         }
 
@@ -151,18 +141,9 @@ void *download_thread_func(void *arg)
             MPI_Recv(&ok, 1, MPI_INT, optimal_id, RECVFROM_UPLOAD_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             host_requests[optimal_id]++;
 
-            for (auto& e: (*downloaded_files)[element.first]) {
-                string hash = e.first;
-                if (hash.compare(0, HASH_SIZE, segs.first, 0, HASH_SIZE) == 0)
-                    e.second = true;
-            }
-
             unique_lock<mutex> lock(owned_files_mutex);
-            for (auto& e: owned_files[element.first]) {
-                string hash = e.first;
-                if (hash.compare(0, HASH_SIZE, segs.first, 0, HASH_SIZE) == 0)
-                    e.second = true;
-            }
+            string key = element.first + " " + segs.first;
+            owned_files[key] = true;
             lock.unlock();
 
             num_segments++;
@@ -206,8 +187,7 @@ void upload_segment(int ok, int dest) {
     MPI_Send(&ok, 1, MPI_INT, dest, RECVFROM_UPLOAD_TAG, MPI_COMM_WORLD);
 }
 
-void *upload_thread_func(void *arg)
-{
+void *upload_thread_func(void *arg) {
     char buffer[MSG_LEN] = {0};
     while (true) {
         int source = receive_message(buffer, SENDTO_UPLOAD_TAG), ok = 0;
@@ -215,9 +195,8 @@ void *upload_thread_func(void *arg)
         string filename(fname), segment(hash);
 
         unique_lock<mutex> lock(owned_files_mutex);
-        for (const auto& e: owned_files[fname])
-            if (e.first.compare(0, HASH_SIZE, segment, 0, HASH_SIZE) == 0 && e.second)
-                ok = 1;
+        string key = filename + " " + segment;
+        ok = owned_files[key];
         lock.unlock();
 
         if (strncmp(cmd, "check", 5) == 0)
@@ -236,27 +215,28 @@ void init_tracker(int numtasks, int rank) {
     char buffer1[MAX_FILENAME + 1] = {0}, buffer2[HASH_SIZE + 1] = {0};
 
     for (int i = 1; i < numtasks; i++) {
+        int tag = 0;
         // number of files
-        MPI_Recv(&num_files, 1, MPI_INT, i, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&num_files, 1, MPI_INT, i, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
         for (int j = 0; j < num_files; j++) {
             // file name size
-            MPI_Recv(&size, 1, MPI_INT, i, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(&size, 1, MPI_INT, i, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             // file name
-            MPI_Recv(buffer1, size, MPI_CHAR, i, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(buffer1, size, MPI_CHAR, i, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             seed_db[buffer1].push_back(i);
 
             // number of segments
-            MPI_Recv(&num_segments, 1, MPI_INT, i, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(&num_segments, 1, MPI_INT, i, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
             string key;
             for (int k = 0; k < num_segments; k++) {
                 // segment
-                MPI_Recv(buffer2, HASH_SIZE, MPI_CHAR, i, TRACKER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(buffer2, HASH_SIZE, MPI_CHAR, i, tag++, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 key = string(buffer1) + " " + string(buffer2);
-                if (tracker_registered_hashes.find(key) == tracker_registered_hashes.end()) {
+                if (registered_hashes.find(key) == registered_hashes.end()) {
                     hash_db[buffer1].push_back(buffer2);
-                    tracker_registered_hashes[key] = true;
+                    registered_hashes[key] = true;
                 }
             }
 
@@ -268,7 +248,7 @@ void init_tracker(int numtasks, int rank) {
     char ack[4] = "ACK";
     // Sending the OK message to nodes
     for (int i = 1; i < numtasks; i++)
-        MPI_Send(ack, 3, MPI_CHAR, i, TRACKER_TAG, MPI_COMM_WORLD);
+        MPI_Send(ack, 3, MPI_CHAR, i, ACK_TAG, MPI_COMM_WORLD);
 }
 
 void tracker(int numtasks, int rank) {
@@ -292,47 +272,67 @@ void tracker(int numtasks, int rank) {
             segments.pop_back();
 
             int size = seed_db[file].size() + peer_db[file].size();
-            for (const auto& e: seed_db[file])
-                if (e == source)
-                    size--;
-            for (const auto& e: peer_db[file])
-                if (e == source)
+            unordered_map<int, bool> seeds;
+            for (const auto& e: seed_db[file]) {
+                if (e == source || seeds.find(e) != seeds.end())
                     size--;
 
+                seeds[e] = true;
+            }
+            for (const auto& e: peer_db[file]) {
+                if (e == source || seeds.find(e) != seeds.end())
+                    size--;
+
+                seeds[e] = true;
+            }
+
+            seeds.clear();
             MPI_Send(&size, 1, MPI_INT, source, TRACKER_TAG, MPI_COMM_WORLD);
             for (const auto& e: seed_db[file]) {
-                if (e == source)
+                if (e == source || seeds.find(e) != seeds.end())
                     continue;
                 MPI_Send(&e, 1, MPI_INT, source, TRACKER_TAG, MPI_COMM_WORLD);
+                seeds[e] = true;
             }
 
             for (const auto& e: peer_db[file]) {
-                if (e == source)
+                if (e == source || seeds.find(e) != seeds.end())
                     continue;
                 MPI_Send(&e, 1, MPI_INT, source, TRACKER_TAG, MPI_COMM_WORLD);
+                seeds[e] = true;
             }
         } else if (strncmp(buffer, "update", 6) == 0) {
             strtok(buffer, " ");
             string file(strtok(NULL, " "));
             int size = seed_db[file].size() + peer_db[file].size();
-            for (const auto& e: seed_db[file])
-                if (e == source)
-                    size--;
-            for (const auto& e: peer_db[file])
-                if (e == source)
+            unordered_map<int, bool> seeds;
+            for (const auto& e: seed_db[file]) {
+                if (e == source || seeds.find(e) != seeds.end())
                     size--;
 
+                seeds[e] = true;
+            }
+            for (const auto& e: peer_db[file]) {
+                if (e == source || seeds.find(e) != seeds.end())
+                    size--;
+
+                seeds[e] = true;
+            }
+
+            seeds.clear();
             MPI_Send(&size, 1, MPI_INT, source, TRACKER_TAG, MPI_COMM_WORLD);
             for (const auto& e: seed_db[file]) {
-                if (e == source)
+                if (e == source || seeds.find(e) != seeds.end())
                     continue;
                 MPI_Send(&e, 1, MPI_INT, source, TRACKER_TAG, MPI_COMM_WORLD);
+                seeds[e] = true;
             }
 
             for (const auto& e: peer_db[file]) {
-                if (e == source)
+                if (e == source || seeds.find(e) != seeds.end())
                     continue;
                 MPI_Send(&e, 1, MPI_INT, source, TRACKER_TAG, MPI_COMM_WORLD);
+                seeds[e] = true;
             }
         } else if (strncmp(buffer, "downloaded", 10) == 0) {
             strtok(buffer, " ");
@@ -349,7 +349,7 @@ void tracker(int numtasks, int rank) {
 
     string command = "close dummy dummy";
     for (int i = 1; i < numtasks; i++) {
-        send_message(command, i, 1);
+        send_message(command, i, SENDTO_UPLOAD_TAG);
     }
 }
 

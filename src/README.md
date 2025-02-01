@@ -23,15 +23,14 @@ receive_message(): receives the length, resets the buffer with length chars, the
 The trick is that the size can be received from any source S, but the message should also come from S,
 ensuring the order of the messages.
 
+Two different tags are used in the wrapper functions (tag and tag + 1) to maintain the messages order.
+
 2) Client:
     init_client: reads the data from its configuration file, and sends the owned files
 with the hashes to the tracker. It also retains the list of wanted files. Because the tracker
 can send from multiple sources, a hashmap retains if the hash of (filename - hash_file) was
-previously stored, to avoid duplicates.
-
-    request_file: applications for requesting the swarm, and the list of hashes from the
-tracker, but also for the update_file command. When retaining the needed segments with the
-hashes, a mutex locks the owned_files, because it is also accessed by the update_thread.
+previously stored, to avoid duplicates. Each send message will be on prev_tag + 1 to maintain
+the correctness of data transmission. Also, the ACK message will be received on the ACK_TAG.
 
     save_file: using the stored information, creates an output file and prints the hashes
 
@@ -43,9 +42,14 @@ make an update request to the tracker. After installing, add it in the system, b
 and unlocking the global resource. Notify the tracker after all segments are installed
 and receive a buffer. Notify the tracker after all files were downloaded to close the download thread.
 For communicating with the tracker, tag 0 is sufficient. Now for communicating with the upload_thread,
-two tags should be used, one for sending info (1), and the second one for receving info (2) (BUG that
-consumed time: This prevents the case when the process P receives on the download_thread what it should
-received on the upload_thread).
+two tags should be used, one for sending info (TAG_SEND), and the second one for receving info (TAG_RECV)
+(BUG that consumed time: This prevents the case when the process P receives on the download_thread what it
+should received on the upload_thread). Most of the send are complemented by recv, so no need of a complex
+tag system here.
+
+    request_file command: applications for requesting the swarm, and the list of hashes from the
+tracker, but also for the update_file command. When retaining the needed segments with the
+hashes, a mutex locks the owned_files, because it is also accessed by the update_thread.
 
     upload_thread_func: receives messages from any source, and finds it using the status variable.
 Every message will have the format command + ' ' + filename + ' ' + segment, the parsing being done
@@ -61,13 +65,15 @@ are actively used by the download thread), then send OK(1) or ERR(0) to the MPI_
     tracker_registered_hashes: avoid duplicates
 
     init_tracker: receives the information from the init_client (this was tested), and retain the hashes
-ans the seeds for each file
+ans the seeds for each file. For every host i, the tag resets to 0, but the channel will maintain the
+order, because the function f(host, tag) = (host, tag) is bijective. Every recv will be on tag++.
 
     send_sources: sends a list with seeds and peers for a specific file with no duplicates to a client
 that requested that via update_file or request_file
 
     tracker(): receives a message from any source using the wrapper functions, parses the tokens and
-based on the results it executes the commands
+based on the results it executes the commands. The messages communications are well defined, no need of
+a complex tag system.
 
 ### Efficiency
 
