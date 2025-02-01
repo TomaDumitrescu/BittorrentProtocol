@@ -13,6 +13,8 @@ and for requesting files. The tracker sends the updated nodes swarm for each fil
 of the tracker, and also notifies when all nodes finish. The communication is realised via
 Message Passing Interface.
 
+Run the checker: sudo ./checker.sh
+
 ### Implementation
 
 Following the BitTorrent protocol steps, the following functions were created:
