@@ -61,6 +61,7 @@ In other words, check in the list of owned_files and segments using a mutex (bec
 are actively used by the download thread), then send OK(1) or ERR(0) to the MPI_SOURCE.
 
 3) Tracker:
+
     hash_db: each file mapped to its hashes in order (info takem from the clients).
     seed_db: nodes that contain the files fully
     peer_db: nodes that contain the files partially or which do not contain it at all, but requested it
