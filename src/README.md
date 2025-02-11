@@ -1,4 +1,4 @@
-Copyright 2024 ~ Toma-Ioan Dumitrescu
+Copyright 2025 ~ Toma-Ioan Dumitrescu
 
 Faculty of Automatic Control and Computer Science
 Group: 331CA
